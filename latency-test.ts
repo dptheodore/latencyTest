@@ -66,7 +66,7 @@ async function findValidMarket() {
     console.log("Step 1: Discovery (fetching top active markets)...");
     
     // Sort by volume to ensure liquidity exists
-    const url = `${GAMMA_API}/events?limit=10&active=true&closed=false&order=volume&ascending=false`;
+    const url = `${GAMMA_API}/events?limit=10&closed=false&order=volume24hr&ascending=false`;
     
     const res = await fetch(url, { headers: HEADERS });
     if (!res.ok) throw new Error(`Gamma API returned ${res.status}`);
@@ -116,14 +116,32 @@ async function findValidMarket() {
 
 async function run() {
     const region = process.env.REGION || "Unknown";
+    const manualTokenId = process.env.TOKEN_ID;
+
     console.log(`--- Latency Test (Region: ${region}) ---`);
 
     let target;
-    try {
-        target = await findValidMarket();
-    } catch (e: any) {
-        console.error(`\nCRITICAL ERROR: ${e.message}`);
-        return;
+
+    if (manualTokenId) {
+        console.log(`[CONFIG] Using Manual Token ID: ${manualTokenId}`);
+        console.log("Skipping Gamma API discovery...");
+        
+        // Validate manually provided ID against CLOB
+        const probeRes = await fetch(`${CLOB_API}/price?token_id=${manualTokenId}&side=buy`, { headers: HEADERS });
+        if (probeRes.status === 200) {
+            console.log(`[TARGET LOCKED] Validated manual ID on CLOB.`);
+            target = { tokenId: manualTokenId, slug: "manual-override", question: "Manual Token ID" };
+        } else {
+            console.error(`\nCRITICAL ERROR: Manual Token ID ${manualTokenId} is not responding on CLOB (Status: ${probeRes.status})`);
+            return;
+        }
+    } else {
+        try {
+            target = await findValidMarket();
+        } catch (e: any) {
+            console.error(`\nCRITICAL ERROR: ${e.message}`);
+            return;
+        }
     }
 
     const { tokenId, slug } = target;
@@ -140,16 +158,16 @@ async function run() {
     for (let i = 1; i <= ITERATIONS; i++) {
         process.stdout.write(`.`);
         
-        allRequests.push(await measureRequest("Book", clobBookUrl, i));
-        allRequests.push(await measureRequest("Price", clobPriceUrl, i));
-        allRequests.push(await measureRequest("Midpoint", clobMidUrl, i));
+        allRequests.push(await measureRequest("CLOB Book", clobBookUrl, i));
+        allRequests.push(await measureRequest("CLOB Price", clobPriceUrl, i));
+        allRequests.push(await measureRequest("CLOB Midpoint", clobMidUrl, i));
 
         await sleep(SLEEP_MS);
     }
     console.log("\nDone.\n");
 
     // 3. METRICS
-    const types = ["Book", "Price", "Midpoint"];
+    const types = ["CLOB Book", "CLOB Price", "CLOB Midpoint"];
     const summary = types.map(t => {
         const relevant = allRequests.filter(r => r.type === t && r.success === "YES").map(r => r.duration_ms);
         
